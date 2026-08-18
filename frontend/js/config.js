@@ -11,4 +11,4 @@
 // Production example (after deploying the backend on Render):
 //   window.API_BASE_URL = "https://inboxiq-backend.onrender.com";
 // ---------------------------------------------------------------------
-window.API_BASE_URL = "http://localhost:5000";
+window.API_BASE_URL = "https://e-mail-backend-7zaq.onrender.com";
