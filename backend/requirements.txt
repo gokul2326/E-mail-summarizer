@@ -1,0 +1,6 @@
+Flask==3.0.3
+flask-cors==4.0.1
+gunicorn==22.0.0
+google-genai==2.18.1
+python-dotenv==1.0.1
+vaderSentiment==3.3.2
