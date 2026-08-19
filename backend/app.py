@@ -15,6 +15,7 @@ POST /api/connect-inbox          -> fetch real emails over IMAP (app password)
 """
 
 import os
+import re
 import json
 import time
 import imaplib
@@ -44,7 +45,7 @@ app = Flask(__name__)
 CORS(app)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL_NAME = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 vader = SentimentIntensityAnalyzer()
@@ -241,11 +242,30 @@ def call_gemini(sender: str, subject: str, body: str) -> dict:
             system_instruction=SYSTEM_PROMPT,
             response_mime_type="application/json",  # ask Gemini to return raw JSON
             temperature=0.3,
-            max_output_tokens=1024,
+            max_output_tokens=2048,
         ),
     )
 
-    raw_text = (response.text or "").strip()
+    # If generation was cut off (e.g. hit the token limit) or blocked, response.text
+    # can be empty or raise. Surface a clear, specific error instead of a bare
+    # JSONDecodeError so it's obvious what went wrong.
+    candidates = getattr(response, "candidates", None) or []
+    if candidates:
+        finish_reason = getattr(candidates[0], "finish_reason", None)
+        finish_reason_name = getattr(finish_reason, "name", str(finish_reason))
+        if finish_reason_name not in ("STOP", "None", None):
+            raise RuntimeError(
+                f"Gemini stopped generating early ({finish_reason_name}). "
+                "Try again, or try a shorter email body."
+            )
+
+    try:
+        raw_text = (response.text or "").strip()
+    except Exception:
+        raw_text = ""
+
+    if not raw_text:
+        raise RuntimeError("Gemini returned an empty response. Please try again.")
 
     # Defensive cleanup in case the model wraps the JSON in a code fence
     if raw_text.startswith("```"):
@@ -254,7 +274,15 @@ def call_gemini(sender: str, subject: str, body: str) -> dict:
             raw_text = raw_text[4:]
         raw_text = raw_text.strip()
 
-    return json.loads(raw_text)
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        # Fallback: extract the outermost {...} block in case of stray
+        # leading/trailing text and retry once before giving up.
+        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
 
 
 def vader_signal(body: str) -> dict:
